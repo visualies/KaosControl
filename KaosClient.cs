@@ -3,6 +3,7 @@ using KaosControl.Entities;
 using MySql.Data.MySqlClient;
 using PermissionRanks.Exceptions;
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
@@ -24,7 +25,6 @@ namespace KaosControl
             ConnectionString = connectionString;
             await Task.CompletedTask;
         }
-
         public async Task<KaosUser> GetUserAsync(long steamId)
         {
             var sql = $"SELECT * FROM players WHERE SteamId = '{steamId}'";
@@ -33,17 +33,38 @@ namespace KaosControl
             {
                 var user = await connection.QueryFirstOrDefaultAsync<KaosUser>(sql);
 
-                if (user == null)
-                {
-                    throw new EntityNotFoundException("User could not be found in database");
-                }
-
                 user.Client = this;
-
                 return user;
             }
         }
-        public async Task RankUpAsync(KaosUser user)
+        public async Task<List<KaosUser>> GetAllUsersAsync()
+        {
+            var sql = $"SELECT * FROM players";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var users = await connection.QueryAsync<KaosUser>(sql);
+
+                foreach (KaosUser user in users)
+                {
+                    user.Client = this;
+
+                }
+
+                return users.ToList();
+            }
+        }
+        public async Task RemoveExpiredExperienceMultipliersAsync()
+        {
+            var sql = $"DELETE FROM experienceboosts WHERE ExpiryDate < @Date";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                await connection.ExecuteAsync(sql, new { Date = DateTime.Now });
+            }
+        }
+
+        internal async Task RankUpAsync(KaosUser user)
         {
             try
             {
@@ -57,7 +78,7 @@ namespace KaosControl
                 return;
             }
         }
-        public async Task SetRankAsync(KaosUser user, int id)
+        internal async Task SetRankAsync(KaosUser user, int id)
         {
             var sql = $"UPDATE players SET Rank = {id} WHERE SteamId = {user.SteamId}";
 
@@ -66,7 +87,7 @@ namespace KaosControl
                 await connection.ExecuteAsync(sql);
             }
         }
-        public async Task AddPointsAsync(KaosUser user, int amount)
+        internal async Task AddPointsAsync(KaosUser user, int amount)
         {
             var sql = $"UPDATE arkshopplayers SET Points = Points + {amount} WHERE SteamId = {user.SteamId}";
 
@@ -75,27 +96,87 @@ namespace KaosControl
                 await connection.ExecuteAsync(sql);
             }
         }
-        public async Task AddExperienceAsync(KaosUser user, int amount)
+        internal async Task AddExperienceAsync(KaosUser user, int amount)
         {
-            var xp = (int)(user.Experience + amount);
-            var rank = await GetRankAsync(user.Rank + 1);
+            var multiplier = await GetExperienceMultiplierAsync(user);
+            var newXp = (int)(user.Experience + (amount * multiplier));
+            try
+            {
+                var newRank = await GetRankAsync(user.Rank + 1);
 
-            if (xp < rank.RequiredExperience)
-            {
-                await SetExperienceAsync(user, xp);
-                return;
+                if (newXp < newRank.RequiredExperience)
+                {
+                    await SetExperienceAsync(user, newXp);
+                    return;
+                }
+                if (newXp >= newRank.RequiredExperience)
+                {
+                    await SetExperienceAsync(user, newXp - newRank.RequiredExperience);
+                    await RankUpAsync(user);
+                    await AddExperienceAsync(user, 0);
+                    return;
+                }
             }
-            if (xp >= rank.RequiredExperience)
+            catch (EntityNotFoundException)
             {
-                await SetExperienceAsync(user, xp - rank.RequiredExperience);
-                await RankUpAsync(user);
-                await AddExperienceAsync(user, 0);
                 return;
             }
         }
+        internal async Task AddExperienceMultiplierAsync(KaosUser user, double multiplier, string type, int duration)
+        {
 
+            var date = DateTime.Now.AddMinutes(duration);
+            var query = $"SELECT * FROM experienceboosts WHERE SteamId = @SteamId AND Type = @Type";
+            var insert = $"INSERT INTO experienceboosts (SteamId, Multiplier, Type, ExpiryDate) Values (@SteamId, @Multiplier, @Type, @ExpiryDate)";
+            var update = $"UPDATE experienceboosts SET ExpiryDate = @ExpiryDate WHERE SteamId = @SteamId AND Type = @Type";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var boost = await connection.QueryFirstOrDefaultAsync(query, new {SteamId = user.SteamId, Type = type });
+                if (boost != null)
+                {
+                    //If boost type already present, refresh expiry date
+                    await connection.ExecuteAsync(update, new { ExpiryDate = date, SteamId = user.SteamId, Type = type });
+                    return;
+                }
+                else
+                {
+                    await connection.ExecuteAsync(insert, new { SteamId = user.SteamId, Multiplier = multiplier, Type = type, ExpiryDate = date });
+                }
+            }
+        }
+        internal async Task<ulong> GetDiscordIdAsync(KaosUser user)
+        {
+            var sql = $"SELECT discid FROM discordaddonplayers WHERE SteamId = @SteamId";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                //test if cast //todo
+                var discordId = await connection.QueryFirstOrDefaultAsync<ulong>(sql, new {SteamId = user.SteamId});
+                return discordId;
+            }
+        }
+        private async Task<double> GetExperienceMultiplierAsync(KaosUser user)
+        {
+            double multiplier = 1;
+
+            var sql = $"SELECT * FROM experienceboosts WHERE SteamId = '{user.SteamId}'";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var query = await connection.QueryAsync<ExperienceBoost>(sql);
+
+
+                foreach (ExperienceBoost boost in query)
+                {
+                    multiplier = multiplier * boost.Multiplier;
+                }
+            }
+
+            return multiplier;
+        }
         private async Task SetExperienceAsync(KaosUser user, int amount)
-        {  
+        {
             var sql = $"UPDATE players SET Experience = {amount} WHERE SteamId = {user.SteamId}";
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))

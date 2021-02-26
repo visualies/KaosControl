@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace KaosControl
+namespace KaosControl.Entities
 {
     public abstract class KaosEntity
     {

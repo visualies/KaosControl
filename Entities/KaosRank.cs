@@ -12,7 +12,6 @@ namespace KaosControl.Entities
         public string ColorCode { get; set; }
         public string PermissionGroup { get; set; }
         public int RequiredExperience { get; set; }
-        public int PointsReward { get; set; }
         public ulong DiscordRoleId { get; set; }
     }
 }

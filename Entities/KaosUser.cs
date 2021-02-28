@@ -10,7 +10,7 @@ namespace KaosControl.Entities
         public long SteamId { get; set; }
         public ulong? DiscordId { get; set; }
         public int Rank { get; set; }
-        public int Experience { get; set; }
+        public int Experience { get; private set; }
 
         public async Task RankUpAsync()
         {
@@ -35,6 +35,10 @@ namespace KaosControl.Entities
         public async Task<ulong> GetDiscordIdAsync()
         {
             return await Client.GetDiscordIdAsync(this);
+        }
+        public async Task<int> GetMaxTribeSizeAsync()
+        {
+            return await Client.GetMaxTribeSizeAsync(this);
         }
     }
 }

@@ -27,7 +27,7 @@ namespace KaosControl.Entities
 
         public async Task<int> GetTribeSizeAsync()
         {
-            return await Client.GetTribeSizeAsync(this)
+            return await Client.GetTribeSizeAsync(this);
         }
     }
 }

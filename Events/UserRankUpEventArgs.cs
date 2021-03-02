@@ -8,7 +8,7 @@ namespace KaosControl.Events
     public class UserRankUpEventArgs : EventArgs
     {
         public KaosUser User { get; set; }
-        public KaosRank Rank { get; set; }
+        public KaosPlayerRank Rank { get; set; }
 
     }
 }

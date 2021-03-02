@@ -4,14 +4,11 @@ using System.Text;
 
 namespace KaosControl.Entities
 {
-    public class KaosRank
+    public class KaosPlayerRank
     {
         public int Id { get; set; }
         public string Name { get; set; }
-        public string DisplayName { get; set; }
-        public string ColorCode { get; set; }
-        public string PermissionGroup { get; set; }
         public int RequiredExperience { get; set; }
-        public ulong DiscordRoleId { get; set; }
+        public string PermissionGroup { get; set; }
     }
 }

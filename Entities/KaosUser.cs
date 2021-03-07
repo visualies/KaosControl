@@ -10,7 +10,7 @@ namespace KaosControl.Entities
         public long SteamId { get; set; }
         public ulong? DiscordId { get; set; }
         public int Rank { get; set; }
-        public int Experience { get; private set; }
+        public int Experience { get; set; }
 
         public async Task RankUpAsync()
         {
@@ -24,7 +24,14 @@ namespace KaosControl.Entities
         {
             await Client.SetRankAsync(this, rank);
         }
-
+        public async Task TebexRankCheckAsync()
+        {
+            await Client.TebexRankCheckAsync(this);
+        }
+        public async Task TribeMergeFixAsync(string tribeName, string serverName)
+        {
+            await Client.TribeMergeFixAsync(this, tribeName, serverName);
+        }
         public async Task AddExperienceAsync(int amount)
         {
             await Client.AddExperienceAsync(this, amount);
@@ -34,7 +41,6 @@ namespace KaosControl.Entities
             await Client.RemoveExperienceAsync(this, amount);
         }
 
-
         public async Task AddPointsAsync(int amount)
         {
             await Client.AddPointsAsync(this, amount);
@@ -43,7 +49,10 @@ namespace KaosControl.Entities
         {
             await Client.RemovePointsAsync(this, amount);
         }
-
+        public async Task<KaosStats> GetStatsAsync()
+        {
+            return await Client.GetStatsAsync(this);
+        }
         public async Task AddExperienceMultiplierAsync(double multiplier, string type, int duration)
         {
             await Client.AddExperienceMultiplierAsync(this, multiplier, type, duration);
@@ -52,7 +61,6 @@ namespace KaosControl.Entities
         {
             await Client.RemoveExperienceMultiplierAsync(this, type);
         }
-
         public async Task<ulong> GetDiscordIdAsync()
         {
             return await Client.GetDiscordIdAsync(this);
@@ -65,12 +73,14 @@ namespace KaosControl.Entities
         {
             return await Client.GetTribesAsync(this);
         }
-
         public async Task AddPermissionGroupAsync(string name)
         {
             await Client.AddPermissionGroupAsync(this, name);
         }
-
+        public async Task SetTribeRankAsync(int size)
+        {
+            await Client.SetTribeRankAsync(this, size);
+        }
         public async Task RemovePermissionGroupAsync(string name)
         {
             await Client.RemovePermissionGroupAsync(this, name);

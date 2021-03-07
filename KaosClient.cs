@@ -77,7 +77,7 @@ namespace KaosControl
                 var discordAddonPlayer = await connection.QueryFirstOrDefaultAsync<DiscordAddonPlayer>(sql, new { discid = discordId });
                 if (discordAddonPlayer == null)
                 {
-                    throw new EntityNotFoundException("User with specified Discord ID not found in database: [DiscordAddonPlayers]");
+                    throw new UserNotVerifiedException("User with specified Discord ID not found in database: [DiscordAddonPlayers]");
                 }
                 try
                 {
@@ -106,7 +106,7 @@ namespace KaosControl
                 return users.ToList();
             }
         }
-        public async Task<KaosPlayerRank> GetRankAsync(int id)
+        public async Task<KaosPlayerRank> GetKaosRankAsync(int id)
         {
             var rank = Config.PlayerRanks.FirstOrDefault(a => a.Id == id);
             if (rank == null)
@@ -125,6 +125,27 @@ namespace KaosControl
                 await connection.ExecuteAsync(sql, new { Date = DateTime.Now });
             }
         }
+        public async Task VerifyUser(int secret, ulong discordId)
+        {
+            var select = $"SELECT COUNT(SteamId) FROM discordaddonplayers WHERE secret = @Secret";
+            var update = $"UPDATE discordaddonplayers SET discid = @DiscordId WHERE secret = @Secret AND discid IS NULL";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var count = await connection.QueryFirstOrDefaultAsync<int>(select, new { Secret = secret });
+                if (count == 0)
+                {
+                    throw new EntityNotFoundException("No player with this secret was found");
+                }
+                if (count > 1)
+                {
+                    throw new MoreThanOneEntityFoundException("Too many players with same secret found");
+                }
+
+                await connection.ExecuteAsync(update, new { DiscordId = discordId, Secret = secret });
+            }
+        }
+
         #endregion
 
         #region KaosUser
@@ -132,8 +153,8 @@ namespace KaosControl
         {
             try
             {
-                var oldRank = await GetRankAsync(user.Rank);
-                var newRank = await GetRankAsync(user.Rank + 1);
+                var oldRank = await GetKaosRankAsync(user.Rank);
+                var newRank = await GetKaosRankAsync(user.Rank + 1);
 
                 await SetRankAsync(user, newRank);
                 await RemovePermissionGroupAsync(user, oldRank.PermissionGroup);
@@ -150,8 +171,8 @@ namespace KaosControl
         {
             try
             {
-                var oldRank = await GetRankAsync(user.Rank);
-                var newRank = await GetRankAsync(user.Rank - 1);
+                var oldRank = await GetKaosRankAsync(user.Rank);
+                var newRank = await GetKaosRankAsync(user.Rank - 1);
 
                 await SetRankAsync(user, newRank);
                 await RemovePermissionGroupAsync(user, oldRank.PermissionGroup);
@@ -164,16 +185,92 @@ namespace KaosControl
         }
         internal async Task SetRankAsync(KaosUser user, KaosPlayerRank rank)
         {
-            var oldRank = await GetRankAsync(user.Rank);
+            var oldRank = await GetKaosRankAsync(user.Rank);
             await RemovePermissionGroupAsync(user, oldRank.PermissionGroup);
             await AddPermissionGroupAsync(user, rank.PermissionGroup);
-            await SetExperienceAsync(user, 0);
 
             var sql = $"UPDATE players SET Rank = @Rank WHERE SteamId = @SteamId";
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
                 await connection.ExecuteAsync(sql, new { Rank = rank.Id, SteamId = user.SteamId });
+            }
+        }
+        internal async Task<KaosPlayerRank> GetRankAsync(KaosUser user)
+        {
+            try
+            {
+                var sql = $"SELECT Rank FROM players WHERE SteamId = @SteamId";
+
+                using (IDbConnection connection = new MySqlConnection(ConnectionString))
+                {
+                    var rankId = await connection.QueryFirstOrDefaultAsync<int>(sql, new { SteamId = user.SteamId });
+
+                    var rank = await GetKaosRankAsync(rankId);
+                    return rank;
+                }
+            }
+            catch (EntityNotFoundException)
+            {
+                throw new EntityNotFoundException("Rank of user was not found in Config");
+            }
+        }
+        internal async Task<KaosPlayerRank> GetRankPermissionGroupAsync(KaosUser user)
+        {
+            var perms = await GetPermissionGroupsAsync(user);
+            var ranks = Config.PlayerRanks;
+
+            ranks.Reverse();
+            foreach (KaosPlayerRank rank in ranks)
+            {
+                if (perms.Contains(rank.PermissionGroup))
+                {
+                    return rank;
+                }
+            }
+            throw new EntityNotFoundException("User has no permission group of any rank");
+        }
+        internal async Task TebexRankCheckAsync(KaosUser user)
+        {
+            try
+            {
+                var permRank = await GetRankPermissionGroupAsync(user);
+
+                var rank = await GetRankAsync(user);
+                if (rank.Id >= permRank.Id) return;
+
+                await SetRankAsync(user, permRank);
+                await SetExperienceAsync(user, 0);
+            }
+            catch (EntityNotFoundException)
+            {
+                return;
+            }
+        }
+        internal async Task SetTribeRankAsync(KaosUser user, int size)
+        {
+            try
+            {
+                var rank = await GetTribeRankFromSize(size);
+                var perms = await GetPermissionGroupsAsync(user);
+                var ranks = Config.TribeRanks;
+
+                if (perms.Contains(rank.PermissionGroup)) return;
+
+                foreach (KaosTribeRank element in ranks)
+                {
+                    if (perms.Contains(element.PermissionGroup))
+                    {
+                        await RemovePermissionGroupAsync(user, element.PermissionGroup);
+                    }
+                }
+
+                await AddPermissionGroupAsync(user, rank.PermissionGroup);
+
+            }
+            catch (EntityNotFoundException)
+            {
+                return;
             }
         }
 
@@ -183,7 +280,7 @@ namespace KaosControl
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                await connection.ExecuteAsync(sql, new {Amount = amount, SteamId = user.SteamId });
+                await connection.ExecuteAsync(sql, new { Amount = amount, SteamId = user.SteamId });
             }
         }
         internal async Task RemovePointsAsync(KaosUser user, int amount)
@@ -205,7 +302,7 @@ namespace KaosControl
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                var points = await connection.QueryFirstOrDefaultAsync<int>(sql, new {SteamId = user.SteamId});
+                var points = await connection.QueryFirstOrDefaultAsync<int>(sql, new { SteamId = user.SteamId });
                 return points;
             }
         }
@@ -217,7 +314,7 @@ namespace KaosControl
             var newXp = (int)(user.Experience + (amount * multiplier));
             try
             {
-                var newRank = await GetRankAsync(user.Rank + 1);
+                var newRank = await GetKaosRankAsync(user.Rank + 1);
 
                 if (newXp < newRank.RequiredExperience)
                 {
@@ -278,7 +375,7 @@ namespace KaosControl
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                var query = await connection.QueryAsync<ExperienceBoost>(sql, new {SteamId = user.SteamId, Type = type });
+                var query = await connection.QueryAsync<ExperienceBoost>(sql, new { SteamId = user.SteamId, Type = type });
             }
         }
         internal async Task<double> GetExperienceMultiplierAsync(KaosUser user)
@@ -289,7 +386,7 @@ namespace KaosControl
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                var query = await connection.QueryAsync<ExperienceBoost>(sql, new {SteamId = user.SteamId });
+                var query = await connection.QueryAsync<ExperienceBoost>(sql, new { SteamId = user.SteamId });
 
 
                 foreach (ExperienceBoost boost in query)
@@ -328,7 +425,6 @@ namespace KaosControl
                 var perms = query.Split(',').Where(s => !string.IsNullOrWhiteSpace(s));
                 return perms.ToList();
             }
-
         }
 
         internal async Task<List<KaosTribe>> GetTribesAsync(KaosUser user)
@@ -349,6 +445,11 @@ namespace KaosControl
                 {
                     var sql2 = $"SELECT * FROM pvpve_tribes WHERE ID = @Id";
                     var tribe = await connection.QueryFirstOrDefaultAsync<KaosTribe>(sql2, new { Id = tribeId });
+                    if (tribe == null)
+                    {
+                        Console.WriteLine("Tribe from tribe list could not be found in tribes database");
+                        continue;
+                    }
                     tribe.Client = this;
                     tribes.Add(tribe);
                 }
@@ -379,7 +480,7 @@ namespace KaosControl
         }
         internal async Task<int> GetMaxTribeSizeAsync(KaosUser user)
         {
-            var sizes = new List<int>();
+            var sizes = new List<int> { 1 };
             var tribes = await GetTribesAsync(user);
 
             foreach (KaosTribe tribe in tribes)
@@ -387,20 +488,105 @@ namespace KaosControl
                 var size = await tribe.GetTribeSizeAsync();
                 sizes.Add(size);
             }
-
             return sizes.Max();
+        }
+        internal async Task<KaosStats> GetStatsAsync(KaosUser user)
+        {
+            var sql = $"SELECT * FROM advancedachievements_playerdata WHERE SteamId = @SteamId";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var stats = await connection.QueryFirstOrDefaultAsync<KaosStats>(sql, new { SteamId = user.SteamId });
+                if (stats == null) throw new EntityNotFoundException("The specified player has no stat entry");
+                double ratio = stats.PlayerKills;
+                if (stats.DeathByPlayer != 0)
+                {
+                    ratio = Math.Round((double)stats.PlayerKills / (double)stats.DeathByPlayer, 2);
+                }
+                stats.KillDeathRatio = ratio;
+
+                return stats;
+            }
         }
         #endregion
 
         #region KaosTribe
-        internal async Task<List<KaosUser>> GetMembersAsync(KaosTribe tribe)
+        internal async Task TribeMergeFixAsync(KaosUser user, string tribeName, string mapName)
         {
-            var members = new List<KaosUser>();
-            var sql = $"SELECT SteamId FROM pvpve_playerss WHERE TribeList LIKE @Id";
+            try
+            {
+                var tribe = await GetTribeAsync(tribeName, mapName);
+                var Ids = await GetTribeIdsAsync(user);
+
+                if (Ids.Contains(tribe.Id.ToString()))
+                {
+                    return;
+                }
+                else
+                {
+                    Ids.Add(tribe.Id.ToString());
+                    await SetTribeListAsync(user, string.Join(',', Ids));
+                }
+            }
+            catch (EntityNotFoundException)
+            {
+                return;
+            }
+
+        }
+        internal async Task SetTribeListAsync(KaosUser user, string list)
+        {
+            var sql = $"UPDATE pvpve_players SET TribeList = @TribeList WHERE SteamId = @SteamId";
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                var steamIds = await connection.QueryAsync<long>(sql, new { Id = $"%{tribe.Id}" });
+                await connection.ExecuteAsync(sql, new { TribeList = list, SteamId = user.SteamId });
+            }
+        }
+        internal async Task<List<string>> GetTribeIdsAsync(KaosUser user)
+        {
+            var Ids = new List<string>();
+            var sql = $"SELECT TribeList FROM pvpve_players WHERE SteamId = @SteamId";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var tribeString = await connection.QueryFirstOrDefaultAsync<string>(sql, new { SteamId = user.SteamId });
+                if (string.IsNullOrWhiteSpace(tribeString))
+                {
+                    return Ids;
+                }
+
+                Ids = tribeString.Split(',').Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+
+                return Ids;
+            }
+        }
+        public async Task<KaosTribe> GetTribeAsync(string name, string map)
+        {
+            var sql = $"SELECT * FROM pvpve_tribes WHERE TribeName = @TribeName AND ServerName = @ServerName";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var tribe = await connection.QueryFirstOrDefaultAsync<KaosTribe>(sql, new { TribeName = name, ServerName = map });
+                if (tribe == null)
+                {
+                    throw new EntityNotFoundException("Specified tribe was not found");
+                }
+
+                tribe.Client = this;
+
+                return tribe;
+            }
+
+        }
+        internal async Task<List<KaosUser>> GetMembersAsync(KaosTribe tribe)
+        {
+            var members = new List<KaosUser>();
+            var sql = $"SELECT SteamId FROM pvpve_playerss WHERE TribeList RLIKE @Id";
+
+            using (IDbConnection connection = new MySqlConnection(ConnectionString))
+            {
+                var steamIds = await connection.QueryAsync<long>(sql, new { Id = $"[[:<:]]{tribe.Id}[[:>:]]" });
 
                 foreach (long steamId in steamIds)
                 {
@@ -413,11 +599,12 @@ namespace KaosControl
         }
         internal async Task<int> GetTribeSizeAsync(KaosTribe tribe)
         {
-            var sql = $"SELECT COUNT(SteamId) FROM pvpve_players WHERE TribeList LIKE @Id";
+            var sql = $"SELECT COUNT(SteamId) FROM pvpve_players WHERE TribeList RLIKE @Id";
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                var size = await connection.QueryFirstOrDefaultAsync<int>(sql, new { Id = $"%{tribe.Id}" });
+                var size = await connection.QueryFirstOrDefaultAsync<int>(sql, new { Id = $"[[:<:]]{tribe.Id}[[:>:]]" });
+                if (size == 0) return 1;
                 return size;
             }
         }
@@ -427,6 +614,19 @@ namespace KaosControl
         }
         #endregion
 
+        #region Leaderboard
+
+        public async Task GetTop10Async()
+        {
+
+        }
+        public async Task GetStatsAsync()
+        {
+
+        }
+
+        #endregion
+
         #region Private
         private async Task SetPointsAsync(KaosUser user, int amount)
         {
@@ -434,7 +634,7 @@ namespace KaosControl
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                await connection.ExecuteAsync(sql, new { Amount = amount, SteamId = user.SteamId} );
+                await connection.ExecuteAsync(sql, new { Amount = amount, SteamId = user.SteamId });
             }
         }
         private async Task SetPermissionGroupsAsync(KaosUser user, List<string> groups)
@@ -450,11 +650,12 @@ namespace KaosControl
         }
         private async Task SetExperienceAsync(KaosUser user, int value)
         {
+            user.Experience = value;
             var sql = $"UPDATE players SET Experience = @Value WHERE SteamId = @SteamId";
 
             using (IDbConnection connection = new MySqlConnection(ConnectionString))
             {
-                await connection.ExecuteAsync(sql, new {Value = value, SteamId = user.SteamId });
+                await connection.ExecuteAsync(sql, new { Value = value, SteamId = user.SteamId });
             }
         }
         private async Task SetBubbleExperienceAsync(KaosTribe tribe, int value)
@@ -465,6 +666,17 @@ namespace KaosControl
             {
                 await connection.ExecuteAsync(sql);
             }
+        }
+
+        private async Task<KaosTribeRank> GetTribeRankFromSize(int size)
+        {
+            var rank = Config.TribeRanks.FirstOrDefault(a => a.TribeSize == size);
+            if (rank == null)
+            {
+                throw new EntityNotFoundException("TribeRank for this size is not defined");
+            }
+            await Task.CompletedTask;
+            return rank;
         }
         #endregion
     }
